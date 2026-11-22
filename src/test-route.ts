@@ -344,7 +344,7 @@ export async function probeSubscriptionConnection(
 /** Dependencies the test route needs from the plugin entry. */
 export interface TestRouteDeps {
   /** The credential each cloud provider or named relay channel probes with, when one is stored. */
-  resolveKey(provider: CloudImageProvider, channel?: string): Promise<string | undefined>
+  resolveKey(provider: CloudImageProvider, channel: string | undefined, config: Config): Promise<string | undefined>
   /** The currently authoritative config, including unsaved defaults. */
   config(): Config
   /** The internal subscription account manager for the login-state probes. */
@@ -375,7 +375,11 @@ export async function serveTestConnection(req: IncomingMessage, res: ServerRespo
     return jsonError(res, 400, 'invalid-channel')
   }
   const channel = typeof rawChannel === 'string' ? rawChannel.trim() : undefined
-  const requestConfig = (): Config => active === 'openai-compat' ? withOpenAICompatChannel(deps.config(), channel) : deps.config()
+  const requestContext = () => {
+    const config = deps.config()
+    const requestConfig = active === 'openai-compat' ? withOpenAICompatChannel(config, channel) : config
+    return { config, requestConfig }
+  }
 
   if (action === 'models') {
     // Model pulling ships for every cloud provider; ComfyUI and the
@@ -383,12 +387,13 @@ export async function serveTestConnection(req: IncomingMessage, res: ServerRespo
     if (active === 'comfyui' || isSubscriptionProvider(active)) return jsonError(res, 400, 'models-unsupported')
     let result: ModelsResult
     try {
-      const apiKey = await deps.resolveKey(active as CloudImageProvider, channel)
+      const { config, requestConfig } = requestContext()
+      const apiKey = await deps.resolveKey(active as CloudImageProvider, channel, config)
       result = active === 'google'
-        ? await fetchGoogleImageModels(requestConfig(), apiKey)
+        ? await fetchGoogleImageModels(requestConfig, apiKey)
         : active === 'dashscope'
-          ? await fetchDashScopeImageModels(requestConfig(), apiKey)
-          : await fetchOpenAIImageModels(active as 'openai' | 'openai-compat' | 'seedream' | 'xai' | 'zhipu', requestConfig(), apiKey)
+          ? await fetchDashScopeImageModels(requestConfig, apiKey)
+          : await fetchOpenAIImageModels(active as 'openai' | 'openai-compat' | 'seedream' | 'xai' | 'zhipu', requestConfig, apiKey)
     } catch (error) {
       result = { ok: false, reason: 'error', message: error instanceof Error ? error.message : String(error) }
     }
@@ -402,8 +407,9 @@ export async function serveTestConnection(req: IncomingMessage, res: ServerRespo
     } else if (isSubscriptionProvider(active)) {
       result = await probeSubscriptionConnection(active, deps.subscriptionManager)
     } else {
-      const apiKey = await deps.resolveKey(active as CloudImageProvider, channel)
-      result = await probeProviderConnection(active as CloudImageProvider, requestConfig(), apiKey)
+      const { config, requestConfig } = requestContext()
+      const apiKey = await deps.resolveKey(active as CloudImageProvider, channel, config)
+      result = await probeProviderConnection(active as CloudImageProvider, requestConfig, apiKey)
     }
   } catch (error) {
     result = { ok: false, reason: 'error', message: error instanceof Error ? error.message : String(error) }

@@ -218,7 +218,7 @@ export async function describeStudio(
       return [provider, await resolveApiKey(ctx, provider) !== undefined] as const
     }),
     ...compatChannels.map(async channel => {
-      return [`openai-compat:${channel.id}`, await resolveApiKey(ctx, 'openai-compat', channel.keyRef) !== undefined] as const
+      return [`openai-compat:${channel.id}`, await resolveApiKey(ctx, 'openai-compat', channel.keyRef, channel) !== undefined] as const
     }),
   ])
   const configured = Object.fromEntries(configuredEntries) as Record<string, boolean>
@@ -332,7 +332,7 @@ export async function generateFromStudio(
   if (isSubscriptionProvider(active.provider)) throw new Error('订阅生图应通过订阅渠道执行')
   // ComfyUI is rejected above; subscription channels were routed earlier; narrow for the closures below.
   const wired = active
-  const credential = await requireApiKey(ctx, input.provider, undefined, channel?.keyRef)
+  const credential = await requireApiKey(ctx, input.provider, undefined, channel?.keyRef, channel)
 
   const rawRefs = input.references ?? (input.reference ? [input.reference] : [])
   if (input.mode === 'edit' && rawRefs.length === 0) {

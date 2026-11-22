@@ -8,6 +8,7 @@ import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
 import { Config, migrateOpenAICompatConfig, resolveProvider, selectComfyUIWorkflow, withOpenAICompatChannel, withProviderOverrides, type AspectRatio, type ImageSize } from './config.js'
 import { withGenerationTimeout } from './generation-timeout.js'
+import { withPlatformImageUpstream } from './platform-image-upstream.js'
 import { requireApiKey, resolveApiKey } from './credentials.js'
 import { CanvasMirror } from './canvas-state.js'
 import { serveCanvasState } from './canvas-state-route.js'
@@ -205,7 +206,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   // Migration on every read: relay configs saved under the old single OpenAI
   // slot keep moving to the dedicated compat row until the persisted copy is
   // rewritten, so both rows coexist after any upgrade.
-  let current: () => Config = () => migrateOpenAICompatConfig(plainConfig(config))
+  let currentSource: () => Config = () => config
+  const current = () => withPlatformImageUpstream(migrateOpenAICompatConfig(plainConfig(currentSource())))
   const knownWorkspaceRoots = new Set<string>()
   // Host-side mirror of the workbench infinite canvas: fed by the canvas-state
   // route, read by the canvas tools, the edit_image canvas_selection source,
@@ -232,8 +234,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   // Raw-image vault: re-read on every call so settings changes apply without a restart.
   const vaultConfig = () => vaultConfigOf(current())
 
-  const settingsHealth = installImageSettings(ctx, current(), {
-    setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
+  const settingsHealth = installImageSettings(ctx, migrateOpenAICompatConfig(plainConfig(config)), {
+    setSource: source => { currentSource = source },
     onChange: () => { void refreshImageToolContext() },
   })
   // Request-image variants are generated on demand and cached forever by the
@@ -390,7 +392,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     webCtx.effect(() => register({
       kind: 'exact', path: TEST_CONNECTION_ROUTE,
       handler: (req, res) => serveTestConnection(req, res, {
-        resolveKey: (provider, channel) => resolveApiKey(ctx, provider, provider === 'openai-compat' ? resolveOpenAICompatChannel(current(), channel).keyRef : undefined),
+        resolveKey: (provider, channelId, snapshot) => {
+          const channel = provider === 'openai-compat' ? resolveOpenAICompatChannel(snapshot, channelId) : undefined
+          return resolveApiKey(ctx, provider, channel?.keyRef, channel)
+        },
         config: () => current(),
         subscriptionManager,
       }),
@@ -511,7 +516,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
     const runCloud = <T>(operation: (signal: AbortSignal) => Promise<T>, gif = false): Promise<T> =>
       withGenerationTimeout(cloudTimeoutFor(current().cloudTimeoutMs, gif), exec.signal, operation)
-    const credential = await requireApiKey(ctx, active.provider, 'generate_image', active.provider === 'openai-compat' ? resolveOpenAICompatChannel(requestConfig, args.channel).keyRef : undefined)
+    const channel = active.provider === 'openai-compat' ? resolveOpenAICompatChannel(requestConfig, args.channel) : undefined
+    const credential = await requireApiKey(ctx, active.provider, 'generate_image', channel?.keyRef, channel)
     if (active.provider === 'google') {
       const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
       const imageSize = (args.image_size ?? active.imageSize) as ImageSize
@@ -815,7 +821,8 @@ export function apply(ctx: Context, config: Config = {}): void {
         return saveGenerated(ctx, generated, active.provider, active.model, 'subscription edit', current(), exec, knownWorkspaceRoots)
       }
 
-      const credential = await requireApiKey(ctx, active.provider, 'edit_image', active.provider === 'openai-compat' ? resolveOpenAICompatChannel(requestConfig, args.channel).keyRef : undefined)
+      const channel = active.provider === 'openai-compat' ? resolveOpenAICompatChannel(requestConfig, args.channel) : undefined
+      const credential = await requireApiKey(ctx, active.provider, 'edit_image', channel?.keyRef, channel)
       if (active.provider === 'google') {
         const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
         const imageSize = (args.image_size ?? active.imageSize) as ImageSize

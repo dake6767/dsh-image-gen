@@ -30,6 +30,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { withOpenAICompatChannel, type Config } from './config.js'
+import { platformImageToken } from './platform-image-upstream.js'
 import { resolveApiKey } from './credentials.js'
 import {
   cloudCredentialRef,
@@ -97,7 +98,7 @@ function cachedByKey(key: string, now: number): readonly string[] | undefined {
 /** Cache key for one relay channel; absent while the row names no address. */
 function relayCacheKey(channel: OpenAICompatChannel): string | undefined {
   const baseURL = channel.baseURL.trim()
-  return baseURL.length === 0 ? undefined : cacheKeyFor(baseURL, channel.keyRef)
+  return baseURL.length === 0 || platformImageToken(channel) !== undefined ? undefined : cacheKeyFor(baseURL, channel.keyRef)
 }
 
 /**
@@ -116,7 +117,7 @@ export function primeChannelModels(
   now: number = Date.now(),
 ): Promise<readonly string[]> {
   const baseURL = channel.baseURL.trim()
-  if (baseURL.length === 0) return Promise.resolve([])
+  if (baseURL.length === 0 || platformImageToken(channel) !== undefined) return Promise.resolve([])
   const key = cacheKeyFor(baseURL, channel.keyRef)
   const cached = cache.get(key)
   if (cached !== undefined && cached.expiresAt > now) return Promise.resolve(cached.models)
@@ -126,7 +127,7 @@ export function primeChannelModels(
     // "No key stored" is a local fact, not an endpoint answer: deciding it
     // without caching means a freshly entered key starts discovery on the next
     // render instead of leaving the picker empty for a whole TTL.
-    const apiKey = await resolveApiKey(ctx, 'openai-compat', channel.keyRef).catch(() => undefined)
+    const apiKey = await resolveApiKey(ctx, 'openai-compat', channel.keyRef, channel).catch(() => undefined)
     if (apiKey === undefined) return []
     let pulled: string[] | undefined
     try {
@@ -354,7 +355,7 @@ function profileCacheKey(profile: StudioProviderProfile, config: Config): string
   if (profile.provider === 'openai-compat') {
     const channel = resolveOpenAICompatChannel(config, profile.channel)
     const baseURL = channel.baseURL.trim()
-    return baseURL.length === 0 ? undefined : cacheKeyFor(baseURL, channel.keyRef)
+    return baseURL.length === 0 || platformImageToken(channel) !== undefined ? undefined : cacheKeyFor(baseURL, channel.keyRef)
   }
   return officialLookupKey(profile.provider as CloudImageProvider, config)
 }

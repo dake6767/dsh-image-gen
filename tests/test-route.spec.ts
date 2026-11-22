@@ -170,6 +170,42 @@ describe('test connection route', () => {
     vi.unstubAllGlobals()
   })
 
+  it.each([undefined, 'models'])('keeps the connection probe on the same config as its key (%s)', async action => {
+    const fetchMock = stubProbeFetch(async () => new Response('{"data":[]}', { status: 200 }))
+    const before = { openaiCompatBaseURL: 'http://127.0.0.1:4321/binding' }
+    let active = before
+    server = createServer((req, res) => {
+      void serveTestConnection(req, res, {
+        config: () => active,
+        resolveKey: async (_provider, _channel, snapshot) => {
+          expect(snapshot).toBe(before)
+          active = { openaiCompatBaseURL: 'https://personal.invalid/v1' }
+          return 'managed-fixture-token'
+        },
+      }).catch(() => { res.statusCode = 500; res.end() })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    serverUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const response = await fetch(serverUrl, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'openai-compat', action }),
+    })
+    await expect(response.json()).resolves.toMatchObject({ ok: true })
+    const [, probe] = fetchMock.mock.calls
+    expect(String(probe?.[0])).toBe('http://127.0.0.1:4321/binding/models')
+    expect(new Headers(probe?.[1]?.headers).get('authorization')).toBe('Bearer managed-fixture-token')
+  })
+
+  it('returns a structured error when the requested channel has been removed', async () => {
+    await startServer({ key: 'member-fixture-token' })
+    const response = await fetch(serverUrl, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'openai-compat', channel: 'removed-channel' }),
+    })
+    await expect(response.json()).resolves.toMatchObject({ ok: false, reason: 'error' })
+    expect(probeCalls).toEqual([])
+  })
+
   it('probes the requested provider with its stored key', async () => {
     const fetchMock = stubProbeFetch(async () => new Response('ok', { status: 200 }))
     await startServer({ key: 'sk-live' })
